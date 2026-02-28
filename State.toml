@@ -1,0 +1,11 @@
+﻿# XDV Domain Hypervisor Workspace Manifest
+[workspace]
+name = "xdv_hypervisor"
+version = "0.1.0"
+description = "Standalone Domain Hypervisor project for virtual hybrid machine lifecycle and isolation controls."
+[sector]
+name = "xdv_hypervisor"
+path = "src"
+[target.x64-pc-none]
+linker = "ld"
+linker_flags = ["-nostdlib", "-static"]
