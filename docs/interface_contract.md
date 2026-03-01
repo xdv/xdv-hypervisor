@@ -1,18 +1,38 @@
-﻿# Interface Contract
+# Interface Contract
 Project: XDV Domain Hypervisor
-Specification: XDV-014
+Specification: XDV-014 / XDV-083
 Forge: XdvHypervisor
+
 ## Versioning
 - Interface version: 0.1.0
-- Stability tier: stable-alpha
+- Lifecycle API version: 1
+- Isolation API version: 1
+- Policy API version: 1
+- Stability tier: frozen_normative
+
 ## Contract Rules
-- Exported procedures must preserve deterministic behavior for identical inputs.
-- Return code semantics are part of the public contract and cannot change without a major version bump.
-- Domain tags, capability masks, and status constants are externally visible contract data.
-- New constants/procedures must be additive unless major-version upgrade is declared.
-## Current Public Files
-- src/hypervisor.ds
-- src/hypervisor_interface.ds
-## Migration Notes
-This project was split from xdv-kernel/sector/xdv_hypervisor.
-Kernel integration paths should progressively switch from sector-local imports to versioned dependency usage.
+- VHM lifecycle transitions must be deterministic and capability-scoped.
+- Nested virtualization checks must enforce depth/quota constraints.
+- Resource table ownership and attachment must be VHM-isolated.
+- Snapshot and migration policy checks must be explicit and deterministic.
+
+## Public Files
+- `src/hypervisor.ds`
+- `src/hypervisor_interface.ds`
+
+## Key Public APIs
+- `vhm_lifecycle_transition(...)`
+- `validate_nested_constraints(...)`
+- `create_nested_virtual_machine(...)`
+- `validate_resource_table_isolation(...)`
+- `validate_resource_conservation(...)`
+- `snapshot_policy_check(...)`
+- `migration_policy_check(...)`
+
+## Stable Version APIs
+- `xdv_hypervisor_interface_version_major()`
+- `xdv_hypervisor_interface_version_minor()`
+- `xdv_hypervisor_interface_version_patch()`
+- `xdv_hypervisor_lifecycle_api_version()`
+- `xdv_hypervisor_isolation_api_version()`
+- `xdv_hypervisor_policy_api_version()`

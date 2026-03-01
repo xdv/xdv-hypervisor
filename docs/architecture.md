@@ -1,5 +1,20 @@
-﻿# Architecture
-XDV Domain Hypervisor is structured in two layers:
-1. Stable interface layer (src/hypervisor_interface.ds)
-2. Implementation layer (src/hypervisor.ds)
-Tests from the source sector are imported into src and can be mirrored into tests as independent suites over time.
+# Architecture
+
+`xdv-hypervisor` is organized as:
+1. Stable interface surface (`src/hypervisor_interface.ds`)
+2. Deterministic hypervisor core (`src/hypervisor.ds`)
+
+## Core Enforcement Blocks
+- Lifecycle block:
+  - VHM state validation and deterministic transition rules.
+- Nested virtualization block:
+  - depth, quota, and capability constraints for nested VHMs.
+- Isolation block:
+  - resource table ownership/attachment checks.
+- Policy block:
+  - snapshot policy checks,
+  - migration policy checks for K/Q/Phi paths.
+
+## Determinism
+No random arbitration is used.
+Lifecycle, isolation, and policy decisions are deterministic for identical inputs.

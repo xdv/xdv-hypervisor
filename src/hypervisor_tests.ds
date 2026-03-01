@@ -1,53 +1,190 @@
 // File: hypervisor_tests.ds - This file is part of XDV
 // Copyright (c) 2026 Dust LLC, and Contributors
 // Description:
-//   XDV Kernel - Hypervisor Tests
+//   XDV Hypervisor tests for VHM lifecycle, nested constraints, isolation, and policy checks.
 
 forge HypervisorTests {
 
-    proc K::test_vm_state_enum() {
-        let a = 1;
-        return 0;
+    const TEST_PASS: UInt32 = 0;
+    const TEST_FAIL: UInt32 = 1;
+
+    const STATUS_OK: UInt32 = 0;
+    const STATUS_INVALID_TRANSITION: UInt32 = 4;
+    const STATUS_NESTED_CONSTRAINT: UInt32 = 5;
+    const STATUS_RESOURCE_ISOLATION_VIOLATION: UInt32 = 6;
+    const STATUS_RESOURCE_CONSERVATION_VIOLATION: UInt32 = 7;
+    const STATUS_SNAPSHOT_POLICY_DENIED: UInt32 = 8;
+    const STATUS_MIGRATION_POLICY_DENIED: UInt32 = 9;
+
+    const DOMAIN_K: UInt32 = 0;
+    const DOMAIN_Q: UInt32 = 1;
+    const DOMAIN_PHI: UInt32 = 2;
+
+    const VHM_STATE_REQUESTED: UInt32 = 0;
+    const VHM_STATE_VALIDATED: UInt32 = 1;
+    const VHM_STATE_ACTIVE: UInt32 = 2;
+
+    proc K::expect_status(actual: UInt32, expected: UInt32) -> UInt32 {
+        if actual == expected {
+            return TEST_PASS;
+        } else {
+            return TEST_FAIL;
+        }
     }
 
-    proc K::test_create_virtual_machine() {
-        return 0;
+    proc K::test_lifecycle_transition_requested_to_validated() -> UInt32 {
+        let status = vhm_lifecycle_transition(1001, VHM_STATE_REQUESTED, VHM_STATE_VALIDATED, 1);
+        return expect_status(status, STATUS_OK);
     }
 
-    proc K::test_configure_vcpus() {
-        return 0;
+    proc K::test_lifecycle_invalid_transition_requested_to_active() -> UInt32 {
+        let status = vhm_lifecycle_transition(1001, VHM_STATE_REQUESTED, VHM_STATE_ACTIVE, 1);
+        return expect_status(status, STATUS_INVALID_TRANSITION);
     }
 
-    proc K::test_configure_vqpu() {
-        return 0;
+    proc K::test_nested_constraint_depth_violation() -> UInt32 {
+        let status = validate_nested_constraints(1001, 2, 5, 8, 4, 1);
+        return expect_status(status, STATUS_NESTED_CONSTRAINT);
     }
 
-    proc K::test_configure_vphipu() {
-        return 0;
+    proc K::test_nested_constraint_quota_violation() -> UInt32 {
+        let status = validate_nested_constraints(1001, 2, 2, 4, 8, 1);
+        return expect_status(status, STATUS_NESTED_CONSTRAINT);
     }
 
-    proc K::test_configure_vm_memory() {
-        return 0;
+    proc K::test_nested_constraint_success() -> UInt32 {
+        let status = validate_nested_constraints(1001, 2, 2, 8, 4, 1);
+        return expect_status(status, STATUS_OK);
     }
 
-    proc K::test_start_virtual_machine() {
-        return 0;
+    proc K::test_resource_table_isolation_denies_cross_vhm_access() -> UInt32 {
+        let entry = reserve_resource_for_vhm(1001, DOMAIN_Q, 44, 5, 7);
+        let status = attach_resource_to_vhm(1001, 1002, entry);
+        return expect_status(status, STATUS_RESOURCE_ISOLATION_VIOLATION);
     }
 
-    proc K::test_pause_virtual_machine() {
-        return 0;
+    proc K::test_resource_table_isolation_allows_owner_access() -> UInt32 {
+        let entry = reserve_resource_for_vhm(1001, DOMAIN_Q, 44, 5, 7);
+        let status = attach_resource_to_vhm(1001, 1001, entry);
+        return expect_status(status, STATUS_OK);
     }
 
-    proc K::test_resume_virtual_machine() {
-        return 0;
+    proc K::test_resource_conservation_violation() -> UInt32 {
+        let status = validate_resource_conservation(101, 100);
+        return expect_status(status, STATUS_RESOURCE_CONSERVATION_VIOLATION);
     }
 
-    proc K::test_verify_vm_isolation() {
-        return 0;
+    proc K::test_snapshot_policy_denies_q_raw_state() -> UInt32 {
+        let status = snapshot_policy_check(DOMAIN_Q, 1, 1);
+        return expect_status(status, STATUS_SNAPSHOT_POLICY_DENIED);
     }
 
-    proc K::test_get_hypervisor_stats() {
-        return 0;
+    proc K::test_snapshot_policy_denies_phi_raw_state() -> UInt32 {
+        let status = snapshot_policy_check(DOMAIN_PHI, 1, 1);
+        return expect_status(status, STATUS_SNAPSHOT_POLICY_DENIED);
     }
 
+    proc K::test_snapshot_policy_allows_k_state() -> UInt32 {
+        let status = snapshot_policy_check(DOMAIN_K, 1, 1);
+        return expect_status(status, STATUS_OK);
+    }
+
+    proc K::test_q_migration_default_policy_denied() -> UInt32 {
+        let status = check_q_migration_policy(0, 1, 1, 1, 1);
+        return expect_status(status, STATUS_MIGRATION_POLICY_DENIED);
+    }
+
+    proc K::test_q_migration_policy_allowed_with_constraints() -> UInt32 {
+        let status = check_q_migration_policy(1, 1, 1, 1, 1);
+        return expect_status(status, STATUS_OK);
+    }
+
+    proc K::test_phi_migration_default_policy_denied() -> UInt32 {
+        let status = check_phi_migration_policy(0, 1, 1, 1, 1);
+        return expect_status(status, STATUS_MIGRATION_POLICY_DENIED);
+    }
+
+    proc K::test_phi_migration_policy_allowed_with_constraints() -> UInt32 {
+        let status = check_phi_migration_policy(1, 1, 1, 1, 1);
+        return expect_status(status, STATUS_OK);
+    }
+
+    proc K::run_all() -> UInt32 {
+        let t1 = test_lifecycle_transition_requested_to_validated();
+        if t1 == TEST_PASS {
+            let t2 = test_lifecycle_invalid_transition_requested_to_active();
+            if t2 == TEST_PASS {
+                let t3 = test_nested_constraint_depth_violation();
+                if t3 == TEST_PASS {
+                    let t4 = test_nested_constraint_quota_violation();
+                    if t4 == TEST_PASS {
+                        let t5 = test_nested_constraint_success();
+                        if t5 == TEST_PASS {
+                            let t6 = test_resource_table_isolation_denies_cross_vhm_access();
+                            if t6 == TEST_PASS {
+                                let t7 = test_resource_table_isolation_allows_owner_access();
+                                if t7 == TEST_PASS {
+                                    let t8 = test_resource_conservation_violation();
+                                    if t8 == TEST_PASS {
+                                        let t9 = test_snapshot_policy_denies_q_raw_state();
+                                        if t9 == TEST_PASS {
+                                            let t10 = test_snapshot_policy_denies_phi_raw_state();
+                                            if t10 == TEST_PASS {
+                                                let t11 = test_snapshot_policy_allows_k_state();
+                                                if t11 == TEST_PASS {
+                                                    let t12 = test_q_migration_default_policy_denied();
+                                                    if t12 == TEST_PASS {
+                                                        let t13 = test_q_migration_policy_allowed_with_constraints();
+                                                        if t13 == TEST_PASS {
+                                                            let t14 = test_phi_migration_default_policy_denied();
+                                                            if t14 == TEST_PASS {
+                                                                let t15 = test_phi_migration_policy_allowed_with_constraints();
+                                                                if t15 == TEST_PASS {
+                                                                    return TEST_PASS;
+                                                                } else {
+                                                                    return TEST_FAIL;
+                                                                }
+                                                            } else {
+                                                                return TEST_FAIL;
+                                                            }
+                                                        } else {
+                                                            return TEST_FAIL;
+                                                        }
+                                                    } else {
+                                                        return TEST_FAIL;
+                                                    }
+                                                } else {
+                                                    return TEST_FAIL;
+                                                }
+                                            } else {
+                                                return TEST_FAIL;
+                                            }
+                                        } else {
+                                            return TEST_FAIL;
+                                        }
+                                    } else {
+                                        return TEST_FAIL;
+                                    }
+                                } else {
+                                    return TEST_FAIL;
+                                }
+                            } else {
+                                return TEST_FAIL;
+                            }
+                        } else {
+                            return TEST_FAIL;
+                        }
+                    } else {
+                        return TEST_FAIL;
+                    }
+                } else {
+                    return TEST_FAIL;
+                }
+            } else {
+                return TEST_FAIL;
+            }
+        } else {
+            return TEST_FAIL;
+        }
+    }
 }

@@ -1,15 +1,47 @@
-﻿// File: hypervisor_interface.ds
-// Stable interface surface for XDV Domain Hypervisor
+// File: hypervisor_interface.ds
+// Stable interface surface for XDV Domain Hypervisor.
 forge XdvHypervisorInterface {
     const INTERFACE_VERSION_MAJOR: UInt32 = 0;
     const INTERFACE_VERSION_MINOR: UInt32 = 1;
     const INTERFACE_VERSION_PATCH: UInt32 = 0;
+
+    const LIFECYCLE_API_VERSION: UInt32 = 1;
+    const ISOLATION_API_VERSION: UInt32 = 1;
+    const POLICY_API_VERSION: UInt32 = 1;
+
+    proc K::xdv_hypervisor_interface_surface_version_major() -> UInt32 {
+        return INTERFACE_VERSION_MAJOR;
+    }
+
+    proc K::xdv_hypervisor_interface_surface_version_minor() -> UInt32 {
+        return INTERFACE_VERSION_MINOR;
+    }
+
+    proc K::xdv_hypervisor_interface_surface_version_patch() -> UInt32 {
+        return INTERFACE_VERSION_PATCH;
+    }
+
+    proc K::xdv_hypervisor_lifecycle_api_surface_version() -> UInt32 {
+        return LIFECYCLE_API_VERSION;
+    }
+
+    proc K::xdv_hypervisor_isolation_api_surface_version() -> UInt32 {
+        return ISOLATION_API_VERSION;
+    }
+
+    proc K::xdv_hypervisor_policy_api_surface_version() -> UInt32 {
+        return POLICY_API_VERSION;
+    }
+
+    // Compatibility wrappers retained for existing callers.
     proc K::interface_version_major() -> UInt32 {
         return INTERFACE_VERSION_MAJOR;
     }
+
     proc K::interface_version_minor() -> UInt32 {
         return INTERFACE_VERSION_MINOR;
     }
+
     proc K::interface_version_patch() -> UInt32 {
         return INTERFACE_VERSION_PATCH;
     }

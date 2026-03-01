@@ -1,22 +1,58 @@
 // File: hypervisor.ds - This file is part of XDV
 // Copyright (c) 2026 Dust LLC, and Contributors
 // Description:
-//   XDV Kernel - Domain Hypervisor
+//   XDV Domain Hypervisor
+//   VHM lifecycle, nested constraints, resource-table isolation, and migration/snapshot policy checks.
 
 forge XdvHypervisor {
 
     const STATUS_OK: UInt32 = 0;
     const STATUS_CONFIG_ERROR: UInt32 = 1;
     const STATUS_VM_NOT_FOUND: UInt32 = 2;
+    const STATUS_INVALID_LIFECYCLE: UInt32 = 3;
+    const STATUS_INVALID_TRANSITION: UInt32 = 4;
+    const STATUS_NESTED_CONSTRAINT: UInt32 = 5;
+    const STATUS_RESOURCE_ISOLATION_VIOLATION: UInt32 = 6;
+    const STATUS_RESOURCE_CONSERVATION_VIOLATION: UInt32 = 7;
+    const STATUS_SNAPSHOT_POLICY_DENIED: UInt32 = 8;
+    const STATUS_MIGRATION_POLICY_DENIED: UInt32 = 9;
+    const STATUS_CAPABILITY_REQUIRED: UInt32 = 10;
+    const STATUS_INVALID_DOMAIN: UInt32 = 11;
 
-    const DEFAULT_VM_ID: UInt32 = 1;
+    const DOMAIN_K: UInt32 = 0;
+    const DOMAIN_Q: UInt32 = 1;
+    const DOMAIN_PHI: UInt32 = 2;
+
+    const VHM_STATE_REQUESTED: UInt32 = 0;
+    const VHM_STATE_VALIDATED: UInt32 = 1;
+    const VHM_STATE_ACTIVE: UInt32 = 2;
+    const VHM_STATE_PAUSED: UInt32 = 3;
+    const VHM_STATE_TERMINATED: UInt32 = 4;
+    const VHM_STATE_RELEASED: UInt32 = 5;
+
+    const VHM_ID_BASE: UInt32 = 1000;
+    const MAX_NESTING_DEPTH: UInt32 = 3;
+
+    const RESOURCE_OWNER_FACTOR: UInt64 = 1000000000000;
+    const RESOURCE_DOMAIN_FACTOR: UInt64 = 10000000000;
+    const RESOURCE_ID_FACTOR: UInt64 = 100000;
+    const RESOURCE_DURATION_FACTOR: UInt64 = 100;
+
+    const HYPERVISOR_INTERFACE_VERSION_MAJOR: UInt32 = 0;
+    const HYPERVISOR_INTERFACE_VERSION_MINOR: UInt32 = 1;
+    const HYPERVISOR_INTERFACE_VERSION_PATCH: UInt32 = 0;
+
+    const HYPERVISOR_LIFECYCLE_API_VERSION: UInt32 = 1;
+    const HYPERVISOR_ISOLATION_API_VERSION: UInt32 = 1;
+    const HYPERVISOR_POLICY_API_VERSION: UInt32 = 1;
 
     proc K::hypervisor_init() -> UInt32 {
         emit "XDV Hypervisor: Initializing domain hypervisor";
         init_vm_manager();
         init_resource_pools();
         init_isolation_layer();
-        emit "XDV Hypervisor: Domain hypervisor initialized";
+        emit "XDV Hypervisor: VHM lifecycle + nested constraints online";
+        emit "XDV Hypervisor: resource table isolation and policy checks online";
         return STATUS_OK;
     }
 
@@ -35,23 +71,212 @@ forge XdvHypervisor {
         return STATUS_OK;
     }
 
+    proc K::is_valid_domain(domain: UInt32) -> UInt32 {
+        if domain == DOMAIN_K {
+            return 1;
+        } else {
+            if domain == DOMAIN_Q {
+                return 1;
+            } else {
+                if domain == DOMAIN_PHI {
+                    return 1;
+                } else {
+                    return 0;
+                }
+            }
+        }
+    }
+
+    proc K::is_valid_vhm_state(state: UInt32) -> UInt32 {
+        if state == VHM_STATE_REQUESTED {
+            return 1;
+        } else {
+            if state == VHM_STATE_VALIDATED {
+                return 1;
+            } else {
+                if state == VHM_STATE_ACTIVE {
+                    return 1;
+                } else {
+                    if state == VHM_STATE_PAUSED {
+                        return 1;
+                    } else {
+                        if state == VHM_STATE_TERMINATED {
+                            return 1;
+                        } else {
+                            if state == VHM_STATE_RELEASED {
+                                return 1;
+                            } else {
+                                return 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    proc K::is_valid_vm_id(vm_id: UInt32) -> UInt32 {
+        if vm_id < VHM_ID_BASE {
+            return 0;
+        } else {
+            return 1;
+        }
+    }
+
+    proc K::is_lifecycle_transition_allowed(current_state: UInt32, next_state: UInt32) -> UInt32 {
+        if current_state == VHM_STATE_REQUESTED {
+            if next_state == VHM_STATE_VALIDATED {
+                return 1;
+            } else {
+                return 0;
+            }
+        } else {
+            if current_state == VHM_STATE_VALIDATED {
+                if next_state == VHM_STATE_ACTIVE {
+                    return 1;
+                } else {
+                    return 0;
+                }
+            } else {
+                if current_state == VHM_STATE_ACTIVE {
+                    if next_state == VHM_STATE_PAUSED {
+                        return 1;
+                    } else {
+                        if next_state == VHM_STATE_TERMINATED {
+                            return 1;
+                        } else {
+                            return 0;
+                        }
+                    }
+                } else {
+                    if current_state == VHM_STATE_PAUSED {
+                        if next_state == VHM_STATE_ACTIVE {
+                            return 1;
+                        } else {
+                            if next_state == VHM_STATE_TERMINATED {
+                                return 1;
+                            } else {
+                                return 0;
+                            }
+                        }
+                    } else {
+                        if current_state == VHM_STATE_TERMINATED {
+                            if next_state == VHM_STATE_RELEASED {
+                                return 1;
+                            } else {
+                                return 0;
+                            }
+                        } else {
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    proc K::vhm_lifecycle_transition(vm_id: UInt32, current_state: UInt32, next_state: UInt32, capability_token: UInt64) -> UInt32 {
+        let valid_vm = is_valid_vm_id(vm_id);
+        if valid_vm == 1 {
+        } else {
+            return STATUS_VM_NOT_FOUND;
+        }
+
+        if capability_token == 0 {
+            return STATUS_CAPABILITY_REQUIRED;
+        }
+
+        let current_valid = is_valid_vhm_state(current_state);
+        if current_valid == 1 {
+        } else {
+            return STATUS_INVALID_LIFECYCLE;
+        }
+
+        let next_valid = is_valid_vhm_state(next_state);
+        if next_valid == 1 {
+        } else {
+            return STATUS_INVALID_LIFECYCLE;
+        }
+
+        let allowed = is_lifecycle_transition_allowed(current_state, next_state);
+        if allowed == 1 {
+            return STATUS_OK;
+        } else {
+            return STATUS_INVALID_TRANSITION;
+        }
+    }
+
+    proc K::validate_nested_constraints(
+        parent_vm_id: UInt32,
+        child_profile: UInt32,
+        nesting_depth: UInt32,
+        parent_quota: UInt32,
+        child_quota: UInt32,
+        capability_token: UInt64
+    ) -> UInt32 {
+        let parent_valid = is_valid_vm_id(parent_vm_id);
+        if parent_valid == 1 {
+        } else {
+            return STATUS_VM_NOT_FOUND;
+        }
+
+        if child_profile == 0 {
+            return STATUS_CONFIG_ERROR;
+        }
+
+        if capability_token == 0 {
+            return STATUS_CAPABILITY_REQUIRED;
+        }
+
+        if nesting_depth > MAX_NESTING_DEPTH {
+            return STATUS_NESTED_CONSTRAINT;
+        }
+
+        if child_quota == 0 {
+            return STATUS_NESTED_CONSTRAINT;
+        }
+
+        if child_quota > parent_quota {
+            return STATUS_NESTED_CONSTRAINT;
+        }
+
+        return STATUS_OK;
+    }
+
     proc K::create_virtual_machine(profile: UInt32) -> UInt32 {
         if profile == 0 {
             return STATUS_CONFIG_ERROR;
         } else {
-            return DEFAULT_VM_ID + profile;
+            return VHM_ID_BASE + profile;
+        }
+    }
+
+    proc K::create_nested_virtual_machine(
+        parent_vm_id: UInt32,
+        child_profile: UInt32,
+        nesting_depth: UInt32,
+        parent_quota: UInt32,
+        child_quota: UInt32,
+        capability_token: UInt64
+    ) -> UInt32 {
+        let nested = validate_nested_constraints(parent_vm_id, child_profile, nesting_depth, parent_quota, child_quota, capability_token);
+        if nested == STATUS_OK {
+            return create_virtual_machine(child_profile);
+        } else {
+            return nested;
         }
     }
 
     proc K::configure_vcpus(vm_id: UInt32, count: UInt32) -> UInt32 {
-        if vm_id == 0 {
-            return STATUS_VM_NOT_FOUND;
-        } else {
+        let valid_vm = is_valid_vm_id(vm_id);
+        if valid_vm == 1 {
             if count == 0 {
                 return STATUS_CONFIG_ERROR;
             } else {
                 return STATUS_OK;
             }
+        } else {
+            return STATUS_VM_NOT_FOUND;
         }
     }
 
@@ -64,31 +289,29 @@ forge XdvHypervisor {
     }
 
     proc K::configure_vm_memory(vm_id: UInt32, bytes: UInt64) -> UInt32 {
-        if vm_id == 0 {
-            return STATUS_VM_NOT_FOUND;
-        } else {
+        let valid_vm = is_valid_vm_id(vm_id);
+        if valid_vm == 1 {
             if bytes == 0 {
                 return STATUS_CONFIG_ERROR;
             } else {
                 return STATUS_OK;
             }
+        } else {
+            return STATUS_VM_NOT_FOUND;
         }
     }
 
     proc K::start_virtual_machine(vm_id: UInt32) -> UInt32 {
-        if vm_id == 0 {
-            return STATUS_VM_NOT_FOUND;
-        } else {
+        let valid_vm = is_valid_vm_id(vm_id);
+        if valid_vm == 1 {
             return STATUS_OK;
+        } else {
+            return STATUS_VM_NOT_FOUND;
         }
     }
 
     proc K::pause_virtual_machine(vm_id: UInt32) -> UInt32 {
-        if vm_id == 0 {
-            return STATUS_VM_NOT_FOUND;
-        } else {
-            return STATUS_OK;
-        }
+        return start_virtual_machine(vm_id);
     }
 
     proc K::resume_virtual_machine(vm_id: UInt32) -> UInt32 {
@@ -96,22 +319,221 @@ forge XdvHypervisor {
     }
 
     proc K::destroy_virtual_machine(vm_id: UInt32) -> UInt32 {
-        if vm_id == 0 {
-            return STATUS_VM_NOT_FOUND;
+        return start_virtual_machine(vm_id);
+    }
+
+    proc K::build_resource_table_entry(
+        owner_vm_id: UInt32,
+        domain: UInt32,
+        resource_id: UInt32,
+        duration: UInt32,
+        capability_id: UInt32
+    ) -> UInt64 {
+        let valid_vm = is_valid_vm_id(owner_vm_id);
+        if valid_vm == 1 {
+        } else {
+            return 0;
+        }
+
+        let valid_domain = is_valid_domain(domain);
+        if valid_domain == 1 {
+        } else {
+            return 0;
+        }
+
+        if capability_id == 0 {
+            return 0;
+        }
+
+        return (owner_vm_id * RESOURCE_OWNER_FACTOR)
+            + (domain * RESOURCE_DOMAIN_FACTOR)
+            + (resource_id * RESOURCE_ID_FACTOR)
+            + (duration * RESOURCE_DURATION_FACTOR)
+            + capability_id;
+    }
+
+    proc K::resource_entry_owner_vm(resource_entry: UInt64) -> UInt32 {
+        return resource_entry / RESOURCE_OWNER_FACTOR;
+    }
+
+    proc K::validate_resource_table_isolation(owner_vm_id: UInt32, requester_vm_id: UInt32, resource_entry: UInt64) -> UInt32 {
+        if resource_entry == 0 {
+            return STATUS_CONFIG_ERROR;
+        }
+
+        let embedded_owner = resource_entry_owner_vm(resource_entry);
+        if embedded_owner == owner_vm_id {
+        } else {
+            return STATUS_RESOURCE_ISOLATION_VIOLATION;
+        }
+
+        if requester_vm_id == owner_vm_id {
+            return STATUS_OK;
+        } else {
+            return STATUS_RESOURCE_ISOLATION_VIOLATION;
+        }
+    }
+
+    proc K::reserve_resource_for_vhm(owner_vm_id: UInt32, domain: UInt32, resource_id: UInt32, duration: UInt32, capability_id: UInt32) -> UInt64 {
+        return build_resource_table_entry(owner_vm_id, domain, resource_id, duration, capability_id);
+    }
+
+    proc K::attach_resource_to_vhm(owner_vm_id: UInt32, requester_vm_id: UInt32, resource_entry: UInt64) -> UInt32 {
+        return validate_resource_table_isolation(owner_vm_id, requester_vm_id, resource_entry);
+    }
+
+    proc K::validate_resource_conservation(total_allocated: UInt32, physical_total: UInt32) -> UInt32 {
+        if total_allocated > physical_total {
+            return STATUS_RESOURCE_CONSERVATION_VIOLATION;
         } else {
             return STATUS_OK;
         }
+    }
+
+    proc K::snapshot_policy_check(domain: UInt32, include_raw_state: UInt32, include_contract_metadata: UInt32) -> UInt32 {
+        let valid_domain = is_valid_domain(domain);
+        if valid_domain == 1 {
+        } else {
+            return STATUS_INVALID_DOMAIN;
+        }
+
+        if include_contract_metadata == 1 {
+        } else {
+            return STATUS_SNAPSHOT_POLICY_DENIED;
+        }
+
+        if domain == DOMAIN_K {
+            return STATUS_OK;
+        } else {
+            if include_raw_state == 1 {
+                return STATUS_SNAPSHOT_POLICY_DENIED;
+            } else {
+                return STATUS_OK;
+            }
+        }
+    }
+
+    proc K::migration_policy_check(
+        domain: UInt32,
+        live_migration_requested: UInt32,
+        hardware_support: UInt32,
+        transfer_contract_exists: UInt32,
+        deterministic_log_recorded: UInt32,
+        coherence_guaranteed: UInt32
+    ) -> UInt32 {
+        let valid_domain = is_valid_domain(domain);
+        if valid_domain == 1 {
+        } else {
+            return STATUS_INVALID_DOMAIN;
+        }
+
+        if domain == DOMAIN_K {
+            if live_migration_requested == 1 {
+                if deterministic_log_recorded == 1 {
+                    return STATUS_OK;
+                } else {
+                    return STATUS_MIGRATION_POLICY_DENIED;
+                }
+            } else {
+                return STATUS_OK;
+            }
+        } else {
+            if live_migration_requested == 1 {
+                if hardware_support == 1 {
+                    if transfer_contract_exists == 1 {
+                        if deterministic_log_recorded == 1 {
+                            if domain == DOMAIN_Q {
+                                if coherence_guaranteed == 1 {
+                                    return STATUS_OK;
+                                } else {
+                                    return STATUS_MIGRATION_POLICY_DENIED;
+                                }
+                            } else {
+                                if coherence_guaranteed == 1 {
+                                    return STATUS_OK;
+                                } else {
+                                    return STATUS_MIGRATION_POLICY_DENIED;
+                                }
+                            }
+                        } else {
+                            return STATUS_MIGRATION_POLICY_DENIED;
+                        }
+                    } else {
+                        return STATUS_MIGRATION_POLICY_DENIED;
+                    }
+                } else {
+                    return STATUS_MIGRATION_POLICY_DENIED;
+                }
+            } else {
+                return STATUS_MIGRATION_POLICY_DENIED;
+            }
+        }
+    }
+
+    proc K::check_q_migration_policy(
+        live_migration_requested: UInt32,
+        hardware_support: UInt32,
+        transfer_contract_exists: UInt32,
+        deterministic_log_recorded: UInt32,
+        coherence_guaranteed: UInt32
+    ) -> UInt32 {
+        return migration_policy_check(
+            DOMAIN_Q,
+            live_migration_requested,
+            hardware_support,
+            transfer_contract_exists,
+            deterministic_log_recorded,
+            coherence_guaranteed
+        );
+    }
+
+    proc K::check_phi_migration_policy(
+        live_migration_requested: UInt32,
+        hardware_support: UInt32,
+        transfer_contract_exists: UInt32,
+        deterministic_log_recorded: UInt32,
+        coherence_guaranteed: UInt32
+    ) -> UInt32 {
+        return migration_policy_check(
+            DOMAIN_PHI,
+            live_migration_requested,
+            hardware_support,
+            transfer_contract_exists,
+            deterministic_log_recorded,
+            coherence_guaranteed
+        );
     }
 
     proc K::verify_vm_isolation(vm_id: UInt32) -> UInt32 {
-        if vm_id == 0 {
-            return STATUS_VM_NOT_FOUND;
-        } else {
-            return STATUS_OK;
-        }
+        return start_virtual_machine(vm_id);
     }
 
     proc K::get_hypervisor_stats() -> UInt32 {
-        return DEFAULT_VM_ID;
+        return VHM_ID_BASE;
+    }
+
+    // Stable split-dependency interface contract version (semantic: 0.1.0)
+    proc K::xdv_hypervisor_interface_version_major() -> UInt32 {
+        return HYPERVISOR_INTERFACE_VERSION_MAJOR;
+    }
+
+    proc K::xdv_hypervisor_interface_version_minor() -> UInt32 {
+        return HYPERVISOR_INTERFACE_VERSION_MINOR;
+    }
+
+    proc K::xdv_hypervisor_interface_version_patch() -> UInt32 {
+        return HYPERVISOR_INTERFACE_VERSION_PATCH;
+    }
+
+    proc K::xdv_hypervisor_lifecycle_api_version() -> UInt32 {
+        return HYPERVISOR_LIFECYCLE_API_VERSION;
+    }
+
+    proc K::xdv_hypervisor_isolation_api_version() -> UInt32 {
+        return HYPERVISOR_ISOLATION_API_VERSION;
+    }
+
+    proc K::xdv_hypervisor_policy_api_version() -> UInt32 {
+        return HYPERVISOR_POLICY_API_VERSION;
     }
 }
